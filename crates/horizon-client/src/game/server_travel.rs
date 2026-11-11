@@ -1148,6 +1148,147 @@ mod tests {
         assert!(take_vehicle(&mut mobs, 9, at, 0.0, Vec3::ZERO).is_none());
         assert!(mobs.is_empty());
     }
+
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn paused_server_pass_does_not_finish_a_portal_arrival() {
+        use crate::game::native_machines::tests::server_game;
+        use horizon_client::{
+            chunk::Chunk,
+            lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig},
+        };
+        use horizon_protocol::packets::configuration::ClientInformation;
+        use std::sync::{atomic::AtomicI32, mpsc};
+
+        let mut game = server_game();
+        for cx in -2..=2 {
+            for cz in -2..=2 {
+                game.streaming
+                    .insert_remote(&mut game.world, Chunk::empty(cx, cz));
+                assert!(game.streaming.is_lit(cx, cz));
+            }
+        }
+        game.lan_host(
+            super::super::lan::LanSettings {
+                port: 0,
+                guest_commands: true,
+                force_game_mode: false,
+            },
+            NetConfig {
+                listen: false,
+                announce: false,
+                ..NetConfig::loopback(0, String::new(), 2)
+            },
+            HubConfig {
+                default_game_mode: 0,
+                guest_commands: true,
+                force_game_mode: false,
+                hardcore: false,
+                view_distance: 2,
+                simulation_distance: 2,
+                dimension: "minecraft:the_nether".into(),
+                allow_flight: false,
+                seed: 0,
+                max_players: 2,
+                integrated: true,
+                levels: Default::default(),
+            },
+        )
+        .unwrap();
+
+        let (tx, _rx) = mpsc::channel();
+        let mut guest = Guest::new(
+            Joined {
+                conn: 7,
+                uuid: 77,
+                name: "PortalGuest".into(),
+                properties: Vec::new(),
+                info: ClientInformation::new(2),
+                brand: "test".into(),
+                sender: PlayerSender::new(tx, Arc::default()),
+                latency: Arc::new(AtomicI32::new(0)),
+                address: "127.0.0.1:7".parse().unwrap(),
+                expected: false,
+                configured: Default::default(),
+            },
+            7,
+            [0.5, 65.0, 0.5],
+            2,
+        );
+        guest.dimension = "minecraft:the_nether".into();
+        guest.placed = true;
+        guest.loaded = true;
+        guest.loading = false;
+        guest.health = 20.0;
+        game.lan.as_mut().unwrap().hub.guests.push(guest);
+
+        let portal = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:nether_portal")
+            .unwrap();
+        for x in 8..=9 {
+            for y in 64..=66 {
+                game.world.set(x, y, 8, portal).unwrap();
+            }
+        }
+        for x in 1..=2 {
+            for y in 64..=66 {
+                game.world.set(x, y, 1, portal).unwrap();
+            }
+        }
+        let plan = game.portal_plan(
+            BlockPos::new(8, 64, 8),
+            Vec3::new(8.5, 65.0, 8.5),
+            0.6,
+            1.8,
+            true,
+        );
+        assert_eq!(plan.dim, Dim::Nether);
+        game.dim = plan.dim;
+        let target = Vec3::new(
+            f64::from(plan.approximate.x) + 0.5,
+            f64::from(plan.approximate.y),
+            f64::from(plan.approximate.z) + 0.5,
+        );
+        game.server_trips.push(Trip {
+            conn: 7,
+            dim: Dim::Nether,
+            source: Dim::Overworld,
+            target,
+            end: false,
+            plan: Some(plan),
+            vehicle: None,
+            gateway: None,
+            respawn: None,
+            world_spawn: false,
+            finder: None,
+            placed: false,
+            left: Some(Dim::Overworld),
+        });
+
+        game.tick_lan(true);
+        assert!(
+            game.on_server_trip(7),
+            "the paused pass must leave the portal trip pending"
+        );
+        assert_eq!(
+            game.lan.as_ref().unwrap().hub.guests[0].position,
+            [0.5, 65.0, 0.5]
+        );
+
+        game.tick_lan(false);
+        assert!(
+            !game.on_server_trip(7),
+            "the resumed server tick finishes the portal trip"
+        );
+        assert!(
+            game.lan.as_ref().unwrap().hub.guests[0]
+                .awaiting_teleport
+                .is_some()
+        );
+    }
 }
 
 #[cfg(test)]
