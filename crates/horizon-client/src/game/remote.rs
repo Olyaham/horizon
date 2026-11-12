@@ -2295,7 +2295,6 @@ impl Game<'_> {
         // The replacement player starts with its inventory menu, even if the
         // server switched levels without closing the previous container.
         self.remote_close_local();
-        self.screen = Screen::Playing;
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -3401,6 +3400,7 @@ impl Game<'_> {
                     false,
                     horizon_client::level_loading::Reason::Other,
                 );
+                self.screen = Screen::Playing;
                 // handleLogin: ClientPlayerNetworkEvent.LoggingIn, the new level made.
                 self.native_client_player_network_logging_in();
                 // No ClientInformation here: the configuration phase sent it,
@@ -3470,14 +3470,21 @@ impl Game<'_> {
                     let (music, _) = self.situational_music();
                     self.music.stop_playing(music.as_ref(), &mut self.audio);
                 }
-                self.screen = Screen::Playing;
+                // Vanilla keeps the current screen through a dimension change;
+                // only respawning from the death screen closes it.
+                if self.screen == Screen::Dead {
+                    self.screen = Screen::Playing;
+                    self.ui.death_confirm = None;
+                }
                 if let Some(r) = self.remote.as_mut() {
                     r.death_message = None;
                     r.health = (20.0, 20, 5.0);
                     // handleRespawn: the new LocalPlayer is the camera.
                     r.camera = None;
                 }
-                self.capture(true);
+                if self.screen == Screen::Playing {
+                    self.capture(true);
+                }
             }
             C::PlayerPosition(p) => self.remote_teleport(&p)?,
             C::PlayerRotation(p) => {

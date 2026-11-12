@@ -441,14 +441,29 @@ mod client_tests {
         assert_eq!((&*stone.item, stone.count), ("minecraft:stone", 5));
         assert!(own[1..].iter().all(Option::is_none));
 
-        // A new client level: the handles of the old one read as None.
+        // A new client level: the handles of the old one read as None, while
+        // the open screen survives the dimension change.
+        game.screen = crate::game::Screen::Paused;
         game.handle_packet(C::Respawn(play::Respawn {
             spawn: spawn("minecraft:the_nether"),
             keep: 0,
         }))
         .unwrap();
+        assert!(
+            matches!(game.screen, crate::game::Screen::Paused),
+            "a dimension respawn keeps the screen the client already had open"
+        );
         assert_eq!(game.native_entity_position(stand), None);
         assert_eq!(game.native_entity_kind(display), None);
+
+        // The death screen is the one screen handleRespawn closes.
+        game.screen = crate::game::Screen::Dead;
+        game.handle_packet(C::Respawn(play::Respawn {
+            spawn: spawn("minecraft:overworld"),
+            keep: 0,
+        }))
+        .unwrap();
+        assert!(matches!(game.screen, crate::game::Screen::Playing));
     }
 
     /// #8589: the server sends entity event 42 (the raid sweat) for a villager;

@@ -2641,7 +2641,9 @@ impl Game<'_> {
         self.register_native_commands(&mut host);
         self.resend_native_trees(&mut host);
         // The host's own commands' (and command blocks') players moving
-        // to another level, and their broadcastToAdmins lines.
+        // to another level, and their broadcastToAdmins lines. A command can
+        // arrive through tickPaused's connection pass; keep this distinct
+        // from natural portal simulation, which waits for an unpaused tick.
         if !self.level_teleports.is_empty() {
             self.run_level_teleports(&mut host);
         }
