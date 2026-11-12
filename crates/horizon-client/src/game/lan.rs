@@ -2613,10 +2613,8 @@ impl Game<'_> {
         }
     }
 
-    /// Run the hub for this tick and apply what the guests did. While the
-    /// single player game is `paused` only the connections run
-    /// (`IntegratedServer.tickPaused`): `ServerGamePacketListenerImpl.tick`
-    /// skips `tickPlayer`, so no player's air, hunger or damage moves on.
+    /// Run the hub and apply guest actions. Paused passes service connections
+    /// only (`IntegratedServer.tickPaused`), skipping player and portal simulation.
     pub(super) fn tick_lan(&mut self, paused: bool) {
         // A frozen level does not reach tick_lan_packets through tick_world.
         // Apply its packets before taking the snapshot too.
@@ -2634,9 +2632,7 @@ impl Game<'_> {
         self.register_native_commands(&mut host);
         self.resend_native_trees(&mut host);
         // The host's own commands' (and command blocks') players moving
-        // to another level, and their broadcastToAdmins lines. A command can
-        // arrive through tickPaused's connection pass; keep this distinct
-        // from natural portal simulation, which waits for an unpaused tick.
+        // to another level, and their broadcastToAdmins lines.
         if !self.level_teleports.is_empty() {
             self.run_level_teleports(&mut host);
         }
@@ -2875,8 +2871,6 @@ impl Game<'_> {
         self.lan_flush_effects(&mut host);
         self.lan_living_flags(&mut host);
         self.lan_stuck(&mut host, paused);
-        // Portal arrivals and cooldowns run with server level ticks. Vanilla's
-        // IntegratedServer.tickPaused skips levels while still servicing connections.
         if !paused {
             self.tick_server_travel(&mut host);
         }

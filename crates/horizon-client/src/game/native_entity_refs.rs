@@ -450,7 +450,17 @@ mod client_tests {
             "the login's loading screen has closed"
         );
         game.screen = crate::game::Screen::Paused;
-        assert!(matches!(game.screen, crate::game::Screen::Paused));
+        // A multiplayer PauseScreen does not pause simulation, but portal
+        // effects must leave it open until the server sends Respawn (26.3 E2E).
+        assert!(!game.pauses_game());
+        for _ in 0..2 {
+            game.client_inside_nether_portal();
+            assert!(game.client_portal_effect());
+            assert!(
+                matches!(game.screen, crate::game::Screen::Paused),
+                "portal ticks preserve a pause screen before Respawn"
+            );
+        }
         // A new client level: the handles of the old one read as None.
         game.handle_packet(C::Respawn(play::Respawn {
             spawn: spawn("minecraft:the_nether"),
