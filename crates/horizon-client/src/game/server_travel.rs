@@ -1315,7 +1315,7 @@ mod tests {
         game.level_teleports.push(LevelTeleport {
             conn: 8,
             dim: Dim::Nether,
-            at: [10_000.5, 65.0, 10_000.5],
+            at: [0.5, 65.0, 0.5],
             rotation: None,
             vehicle: None,
             cause: None,
@@ -1335,7 +1335,37 @@ mod tests {
             game.lan.as_ref().unwrap().hub.guests[1].dimension,
             "minecraft:the_nether"
         );
-        for _ in 1..100 {
+
+        // The command's Trip now has a loaded destination. Tick that level
+        // while paused: without the travel gate, this pass consumes the Trip.
+        let mut host = game.lan.take().unwrap();
+        game.enter_level(Some(&mut host), Dim::Nether).unwrap();
+        game.lan = Some(host);
+        for cx in -2..=2 {
+            for cz in -2..=2 {
+                assert!(
+                    game.streaming.is_lit(cx, cz),
+                    "destination arrival requires loaded chunk ({cx}, {cz})"
+                );
+            }
+        }
+        let trip = game
+            .server_trips
+            .iter()
+            .find(|trip| trip.conn == 8)
+            .expect("the command teleport awaits its destination level");
+        assert_eq!(trip.dim, Dim::Nether);
+        assert_eq!(trip.target, Vec3::new(0.5, 65.0, 0.5));
+        game.tick_lan(game.pause);
+        assert!(
+            game.on_server_trip(8),
+            "a paused level pass leaves the loaded command Trip pending"
+        );
+
+        let mut host = game.lan.take().unwrap();
+        game.enter_level(Some(&mut host), Dim::Overworld).unwrap();
+        game.lan = Some(host);
+        for _ in 2..100 {
             game.tick_lan(game.pause);
         }
         assert_eq!(
@@ -1389,14 +1419,17 @@ mod tests {
             "the portal arrival completed for its player"
         );
         assert!(
-            game.on_server_trip(8),
-            "the remote command target is unloaded"
+            !game.on_server_trip(8),
+            "the command Trip completes when its destination level resumes"
         );
         assert_eq!(game.dim, Dim::Nether);
         let guest = &game.lan.as_ref().unwrap().hub.guests[0];
         assert_eq!(guest.dimension, "minecraft:the_nether");
         assert_eq!(guest.position, [1.5, 65.0, 1.5]);
         assert!(guest.awaiting_teleport.is_some());
+        let command_guest = &game.lan.as_ref().unwrap().hub.guests[1];
+        assert_eq!(command_guest.dimension, "minecraft:the_nether");
+        assert_eq!(command_guest.position, [0.5, 65.0, 0.5]);
 
         // Once the integrated world is published, Escape opens the menu but
         // does not pause the server.
