@@ -606,9 +606,18 @@ impl Game<'_> {
                     }
                 }
                 "settle" => {
-                    // Finish portal arrivals using connection-only passes too.
                     while !self.server_trips.is_empty() {
                         self.tick_server(true)?;
+                        // The oracle's explicit `portal` operation teleports
+                        // synchronously, without a player/world tick. Finish
+                        // its asynchronous counterpart here without treating
+                        // this fixture operation as a paused game's arrival.
+                        for dim in self.levels_to_tick() {
+                            self.enter_level(None, dim)?;
+                            let mut host = self.lan.take().ok_or("command harness: no hub")?;
+                            self.arrive_server_trips(&mut host, false);
+                            self.lan = Some(host);
+                        }
                         if Instant::now() > deadline {
                             return Err("command harness: portal did not arrive".into());
                         }
