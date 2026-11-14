@@ -2871,9 +2871,7 @@ impl Game<'_> {
         self.lan_flush_effects(&mut host);
         self.lan_living_flags(&mut host);
         self.lan_stuck(&mut host, paused);
-        if !paused {
-            self.tick_server_travel(&mut host);
-        }
+        self.tick_server_travel(&mut host, paused);
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
         self.lan_guest_poses(&mut host);

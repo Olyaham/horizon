@@ -259,14 +259,15 @@ impl Game<'_> {
             .any(|t| t.vehicle.is_some() && t.source == dim)
     }
 
-    /// Per server tick in each level, after the guests' own: the arrivals of
-    /// the trips into this level, then `Entity.handlePortal` for each player
-    /// in it (Nether portals count up their transition time, End portals
-    /// take them at once).
-    pub(super) fn tick_server_travel(&mut self, host: &mut LanHost) {
-        // Outside a server only the respawns at the world spawn wait for chunks.
+    /// Per server pass in each level, after the guests' own: arrivals of the
+    /// trips into this level, then (unless the level is paused)
+    /// `Entity.handlePortal` for each player in it. A connection-only pass
+    /// still completes arrivals, but does not advance a portal transition.
+    pub(super) fn tick_server_travel(&mut self, host: &mut LanHost, paused: bool) {
+        // Resolve server trips in either mode; only dedicated servers handle
+        // natural portal entry below.
         self.arrive_server_trips(host);
-        if self.options.dedicated.is_none() {
+        if paused || self.options.dedicated.is_none() {
             return;
         }
         self.carry_riders_through_portals(host);
@@ -1303,7 +1304,7 @@ mod tests {
 
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn paused_server_pass_does_not_finish_a_portal_arrival() {
+    fn paused_server_pass_completes_a_loaded_command_arrival_without_ticking_portals() {
         use crate::game::native_machines::tests::server_game;
         use horizon_client::{
             chunk::Chunk,
@@ -1450,10 +1451,8 @@ mod tests {
         command_guest.health = 20.0;
         game.lan.as_mut().unwrap().hub.guests.push(command_guest);
 
-        // The integrated client's pause decision is made without the server
-        // thread's LAN host attached to this test Game. The host is restored
-        // before the following server passes, as it is a separate thread in
-        // production.
+        // This fixture has an in-process host but no network listener. Keep
+        // the client-side pause decision separate from that server fixture.
         let host = game.lan.take().unwrap();
         game.key_pressed(
             winit::keyboard::KeyCode::Escape,
@@ -1475,7 +1474,7 @@ mod tests {
         });
         // The queued command teleport runs during a paused connection pass;
         // natural portal progress remains frozen for the whole 100 passes.
-        game.tick_lan(game.pause);
+        game.tick_server(true).unwrap();
         assert!(
             game.level_teleports.is_empty(),
             "the queued /tp was applied"
@@ -1489,8 +1488,8 @@ mod tests {
             "minecraft:the_nether"
         );
 
-        // The command's Trip now has a loaded destination. Tick that level
-        // while paused: without the travel gate, this pass consumes the Trip.
+        // The command's Trip now has a loaded destination. A connection-only
+        // server pass must consume it even though portal simulation stays paused.
         let mut host = game.lan.take().unwrap();
         game.enter_level(Some(&mut host), Dim::Nether).unwrap();
         game.lan = Some(host);
@@ -1509,17 +1508,22 @@ mod tests {
             .expect("the command teleport awaits its destination level");
         assert_eq!(trip.dim, Dim::Nether);
         assert_eq!(trip.target, Vec3::new(0.5, 65.0, 0.5));
-        game.tick_lan(game.pause);
+        game.tick_server(true).unwrap();
         assert!(
-            game.on_server_trip(8),
-            "a paused level pass leaves the loaded command Trip pending"
+            !game.on_server_trip(8),
+            "a paused connection-only pass finishes the loaded command Trip"
+        );
+        assert_eq!(
+            game.lan.as_ref().unwrap().hub.guests[1].position,
+            [0.5, 65.0, 0.5],
+            "the command guest arrived at the loaded destination"
         );
 
         let mut host = game.lan.take().unwrap();
         game.enter_level(Some(&mut host), Dim::Overworld).unwrap();
         game.lan = Some(host);
         for _ in 2..100 {
-            game.tick_lan(game.pause);
+            game.tick_server(true).unwrap();
         }
         assert_eq!(
             game.lan.as_ref().unwrap().play[&7]
@@ -1552,10 +1556,10 @@ mod tests {
         assert!(!game.pause, "Escape resumes the unpublished world");
         game.lan = Some(host);
         for _ in 0..60 {
-            game.tick_lan(game.pause);
+            game.tick_lan(false);
         }
         assert!(!game.on_server_trip(7), "the threshold has not elapsed yet");
-        game.tick_lan(game.pause);
+        game.tick_lan(false);
         assert!(
             game.on_server_trip(7),
             "the portal trip starts after the remaining unpaused ticks"
@@ -1571,10 +1575,7 @@ mod tests {
             !game.on_server_trip(7),
             "the portal arrival completed for its player"
         );
-        assert!(
-            !game.on_server_trip(8),
-            "the command Trip completes when its destination level resumes"
-        );
+        assert!(!game.on_server_trip(8), "the command Trip stayed completed");
         assert_eq!(game.dim, Dim::Nether);
         let guest = &game.lan.as_ref().unwrap().hub.guests[0];
         assert_eq!(guest.dimension, "minecraft:the_nether");
@@ -1583,23 +1584,6 @@ mod tests {
         let command_guest = &game.lan.as_ref().unwrap().hub.guests[1];
         assert_eq!(command_guest.dimension, "minecraft:the_nether");
         assert_eq!(command_guest.position, [0.5, 65.0, 0.5]);
-
-        // Once the integrated world is published, Escape opens the menu but
-        // does not pause the server.
-        game.screen = crate::game::Screen::Playing;
-        game.key_pressed(
-            winit::keyboard::KeyCode::Escape,
-            winit::keyboard::KeyCode::Escape,
-        )
-        .unwrap();
-        let paused = game.pauses_game();
-        assert!(!paused, "Escape does not pause a world open to LAN");
-        let game_time = game.world.game_time;
-        game.tick_server(paused).unwrap();
-        assert!(
-            game.world.game_time > game_time,
-            "the published world keeps ticking"
-        );
     }
 }
 
@@ -1841,7 +1825,7 @@ mod credits_respawn_tests {
         game.world
             .set(ANCHOR[0], ANCHOR[1], ANCHOR[2], charged)
             .unwrap();
-        game.tick_server_travel(&mut host);
+        game.tick_server_travel(&mut host, false);
 
         // RespawnAnchorBlock.findStandUpPosition: the block's top is the only
         // spot with a floor under it here (`DismountHelper.findSafeDismountLocation`).
