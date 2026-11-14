@@ -188,9 +188,10 @@ impl Game<'_> {
             }
             Ok(())
         })();
-        // Restore even when a level swap or the hub lookup failed midway.
-        self.enter_level(None, back)?;
-        result
+        // Attempt restoration even after a partial pass fails, but keep that
+        // original error if restoration fails too.
+        let restored = self.enter_level(None, back);
+        result.and(restored)
     }
 
     /// Load terrain until the player stands in lit chunks.
